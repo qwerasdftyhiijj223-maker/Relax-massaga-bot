@@ -1,71 +1,115 @@
 import os
+from flask import Flask, request, abort
 import telebot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 TOKEN = os.environ["BOT_TOKEN"]
-ADMIN_ID = os.environ["ADMIN_ID"]
+ADMIN_ID = int(os.environ["ADMIN_ID"])
 PAYMENT_NUMBER = "01120069155"
 FEE = "50 جنيه"
+CONTACT_LINK = os.environ.get("CONTACT_LINK", "")
 
 bot = telebot.TeleBot(TOKEN)
-pending = {}
+app = Flask(__name__)
 
 @bot.message_handler(commands=["start"])
 def start(message):
     keyboard = InlineKeyboardMarkup()
-    keyboard.add(InlineKeyboardButton("طلب التواصل", callback_data="request"))
+    keyboard.add(InlineKeyboardButton(
+        "طلب التواصل", callback_data="request"
+    ))
     bot.send_message(
         message.chat.id,
         "أهلاً بيك في ريلاكس مساج 🌹\n\n"
         f"رسوم التواصل: {FEE}\n"
         f"فودافون كاش: {PAYMENT_NUMBER}\n\n"
-        "حوّل الرسوم ثم اضغط طلب التواصل وأرسل صورة الإيصال.",
+        "حوّل الرسوم ثم اضغط طلب التواصل "
+        "وابعت صورة الإيصال.",
         reply_markup=keyboard
     )
 
-@bot.callback_query_handler(func=lambda call: call.data == "request")
-def request(call):
+@bot.callback_query_handler(func=lambda c: c.data == "request")
+def request_contact(call):
     bot.answer_callback_query(call.id)
-    pending[call.from_user.id] = call.message.chat.id
     bot.send_message(
         call.message.chat.id,
-        "بعد التحويل، ابعت صورة إيصال الدفع هنا للمراجعة."
+        "بعد التحويل، ابعت صورة إيصال الدفع هنا."
     )
 
 @bot.message_handler(content_types=["photo"])
 def receipt(message):
-    uid = str(message.from_user.id)
-    if uid not in pending:
-        bot.reply_to(message, "اضغط طلب التواصل أولاً من /start.")
-        return
     keyboard = InlineKeyboardMarkup()
-    keyboard.add(
-        InlineKeyboardButton("تأكيد الدفع", callback_data=f"approve:{uid}"),
-        InlineKeyboardButton("رفض الإيصال", callback_data=f"reject:{uid}")
+    uid = message.from_user.id
+    keyboard.row(
+        InlineKeyboardButton(
+            "تأكيد الدفع", callback_data=f"approve:{uid}"
+        ),
+        InlineKeyboardButton(
+            "رفض الإيصال", callback_data=f"reject:{uid}"
+        )
     )
     bot.send_photo(
-        int(ADMIN_ID),
+        ADMIN_ID,
         message.photo[-1].file_id,
-        caption=f"إيصال جديد\nالمستخدم: {uid}\nالاسم: {message.from_user.first_name}",
+        caption=(
+            f"إيصال للمراجعة\n"
+            f"المستخدم: {uid}\n"
+            f"الاسم: {message.from_user.first_name}"
+        ),
         reply_markup=keyboard
     )
-    bot.reply_to(message, "تم استلام الإيصال، انتظر مراجعة الدفع.")
+    bot.reply_to(
+        message, "استلمنا الإيصال. انتظر مراجعة الدفع."
+    )
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith(("approve:", "reject:")))
+@bot.callback_query_handler(
+    func=lambda c: c.data.startswith(("approve:", "reject:"))
+)
 def review(call):
-    if str(call.from_user.id) != ADMIN_ID:
+    if call.from_user.id != ADMIN_ID:
         bot.answer_callback_query(call.id, "غير مسموح.")
         return
+
     action, uid = call.data.split(":")
-    chat_id = pending.get(int(uid))
-    if not chat_id:
-        bot.answer_callback_query(call.id, "الطلب غير موجود.")
-        return
+    uid = int(uid)
+
     if action == "approve":
-        bot.send_message(chat_id, "تمت الموافقة على الدفع. تواصل مع صاحب الخدمة عبر حسابه الذي سيُرسل لك بشكل منفصل.")
+        if not CONTACT_LINK:
+            bot.answer_callback_query(
+                call.id, "رابط التواصل لم يُضف بعد."
+            )
+            bot.send_message(
+                ADMIN_ID,
+                "أضف CONTACT_LINK في إعدادات الاستضافة أولاً."
+            )
+            return
+
+        bot.send_message(
+            uid,
+            f"تمت الموافقة على الدفع ✅\nرابط التواصل: {CONTACT_LINK}"
+        )
         bot.answer_callback_query(call.id, "تمت الموافقة.")
     else:
-        bot.send_message(chat_id, "تعذر قبول الإيصال. راجع التحويل وأرسل إيصالاً واضحاً.")
-        bot.answer_callback_query(call.id, "تم رفض الإيصال.")
+        bot.send_message(
+            uid, "تعذر قبول الإيصال. راجع التحويل وأرسل إيصالاً واضحاً."
+        )
+        bot.answer_callback_query(call.id, "تم الرفض.")
 
-bot.infinity_polling()
+@app.route("/")
+def home():
+    return "Relax Massage bot is running", 200
+
+@app.route("/webhook/<secret>", methods=["POST"])
+def webhook(secret):
+    if secret != TOKEN:
+        abort(403)
+    update = telebot.types.Update.de_json(
+        request.get_data().decode("utf-8")
+    )
+    bot.process_new_updates([update])
+    return "OK", 200
+
+if os.environ.get("RENDER_EXTERNAL_URL"):
+    bot.set_webhook(
+        url=f"{os.environ['RENDER_EXTERNAL_URL']}/webhook/{TOKEN}"
+    )
