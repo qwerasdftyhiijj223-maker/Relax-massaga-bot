@@ -1,1 +1,3 @@
-pytelgramBotAPIfIask
+pytelgramBotAPI
+flask
+gunicorn
