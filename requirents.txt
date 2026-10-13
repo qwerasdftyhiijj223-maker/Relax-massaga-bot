@@ -1,3 +1,2 @@
-pytelgramBotAPI
+pyTelegramBotAPI
 flask
-gunicorn
